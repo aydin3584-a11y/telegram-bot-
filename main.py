@@ -1,174 +1,124 @@
-import os
 import math
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
+import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- 1. RENDER PORT VE CANLI TUTMA SUNUCUSU ---
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot 7/24 Aktif!")
+# Telegram Bot Token'ın
+BOT_TOKEN = "8342687226:AAFZjrDQi1kXIZw7-Y5gWEKTp3gz81a56pM"
 
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    server.serve_forever()
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- 2. MATEMATİKSEL FONKSİYONLAR ---
-def poisson(k, lamb):
-    return (lamb ** k * math.exp(-lamb)) / math.factorial(k)
+def poisson_olasilik(lmbda, k):
+    """Poisson olasılık formülü: P(X=k) = (e^(-lambda) * lambda^k) / k!"""
+    return (math.exp(-lmbda) * (lmbda ** k)) / math.factorial(k)
 
-def analiz_motoru(ev_ad, dep_ad, ev_xg, dep_xg, oran=None):
-    # 90 Dakika Matrisi
-    matrix_ms = {}
-    for i in range(7):
-        for j in range(7):
-            matrix_ms[(i, j)] = poisson(i, ev_xg) * poisson(j, dep_xg)
-
-    # İlk Yarı (İY) Yaklaşımı (Genelde gollerin %45'i ilk yarıda olur)
-    ev_iy_xg = ev_xg * 0.45
-    dep_iy_xg = dep_xg * 0.45
-    matrix_iy = {}
-    for i in range(4):
-        for j in range(4):
-            matrix_iy[(i, j)] = poisson(i, ev_iy_xg) * poisson(j, dep_iy_xg)
-
-    # MS İhtimalleri
-    ms1 = sum(p for (i, j), p in matrix_ms.items() if i > j) * 100
-    ms0 = sum(p for (i, j), p in matrix_ms.items() if i == j) * 100
-    ms2 = sum(p for (i, j), p in matrix_ms.items() if i < j) * 100
-
-    # Çifte Şans
-    cs_1x = ms1 + ms0
-    cs_x2 = ms0 + ms2
-    cs_12 = ms1 + ms2
-
-    # İY İhtimalleri
-    iy1 = sum(p for (i, j), p in matrix_iy.items() if i > j) * 100
-    iy0 = sum(p for (i, j), p in matrix_iy.items() if i == j) * 100
-    iy2 = sum(p for (i, j), p in matrix_iy.items() if i < j) * 100
-    iy_ust_05 = sum(p for (i, j), p in matrix_iy.items() if (i + j) > 0.5) * 100
-    iy_ust_15 = sum(p for (i, j), p in matrix_iy.items() if (i + j) > 1.5) * 100
-
-    # Alt / Üst Baremleri
-    ust_15 = sum(p for (i, j), p in matrix_ms.items() if (i + j) > 1.5) * 100
-    ust_25 = sum(p for (i, j), p in matrix_ms.items() if (i + j) > 2.5) * 100
-    ust_35 = sum(p for (i, j), p in matrix_ms.items() if (i + j) > 3.5) * 100
-
-    # KG İhtimalleri
-    kg_var = sum(p for (i, j), p in matrix_ms.items() if i > 0 and j > 0) * 100
-    kg_yok = 100 - kg_var
-
-    # En Olası Skorlar
-    en_olasi_skorlar = sorted(matrix_ms.items(), key=lambda x: x[1], reverse=True)[:4]
-
-    rapor = (
-        f"🎯 **PRO MAÇ ANALİZİ**\n"
-        f"⚽ **{ev_ad.upper()} vs {dep_ad.upper()}**\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🏆 **Maç Sonucu (MS):**\n"
-        f"• 1: %{ms1:.1f} | X: %{ms0:.1f} | 2: %{ms2:.1f}\n"
-        f"• Çifte Şans: 1X: %{cs_1x:.1f} | X2: %{cs_x2:.1f} | 1-2: %{cs_12:.1f}\n\n"
-        f"⏱️ **İlk Yarı (İY):**\n"
-        f"• İY 1: %{iy1:.1f} | İY X: %{iy0:.1f} | İY 2: %{iy2:.1f}\n"
-        f"• İY 0.5 Üst: %{iy_ust_05:.1f} | İY 1.5 Üst: %{iy_ust_15:.1f}\n\n"
-        f"🎯 **Gol Baremleri:**\n"
-        f"• 1.5 Üst: %{ust_15:.1f} | Alt: %{100 - ust_15:.1f}\n"
-        f"• 2.5 Üst: %{ust_25:.1f} | Alt: %{100 - ust_25:.1f}\n"
-        f"• 3.5 Üst: %{ust_35:.1f} | Alt: %{100 - ust_35:.1f}\n\n"
-        f"🔥 **Karşılıklı Gol:**\n"
-        f"• KG Var: %{kg_var:.1f} | KG Yok: %{kg_yok:.1f}\n\n"
-        f"📌 **En Olası Skorlar:**\n"
-    )
-    for (i, j), prob in en_olasi_skorlar:
-        rapor += f"• {i} - {j} ➔ %{prob * 100:.1f}\n"
-
-    # Value Bet ve Kelly Hesabı (Eğer oran verildiyse)
-    if oran:
-        prob_ms1 = ms1 / 100
-        fair_odd = 1 / prob_ms1 if prob_ms1 > 0 else 99
-        b = oran - 1
-        q = 1 - prob_ms1
-        kelly = ((b * prob_ms1) - q) / b if b > 0 else 0
-        
-        rapor += f"\n💰 **VALUE BET & KASA YÖNETİMİ:**\n"
-        rapor += f"• Verilen Oran: {oran:.2f} | Adil Oran: {fair_odd:.2f}\n"
-        if oran > fair_odd:
-            kasa_yuzde = max(0, kelly * 100 * 0.5) # Fractional Kelly (%50 güvenli)
-            rapor += f"✅ **DEĞERLİ BAHİS!**\n• Önerilen Kasa Girişi: %{kasa_yuzde:.1f}\n"
-        else:
-            rapor += "❌ **Değersiz Oran (Pas Geçiniz)**\n"
-
-    return rapor
-
-# --- 3. TELEGRAM HANDLERLARI ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        "🤖 **Gelişmiş İddaa Analiz Robotuna Hoş Geldiniz!**\n\n"
-        "**Kullanım Şekilleri:**\n"
-        "1️⃣ **Hızlı Analiz:**\n"
-        "`/analiz 1.80 1.20`\n\n"
-        "2️⃣ **Takım İsimli Analiz:**\n"
-        "`/analiz Arsenal Chelsea 1.80 1.20`\n\n"
-        "3️⃣ **Value Bet & Kasa Analizli (Oran Ekleyerek):**\n"
-        "`/analiz Arsenal Chelsea 1.80 1.20 2.10`\n"
-        "*(En sondaki 2.10 iddaa'nın ev sahibine açtığı orandır)*"
+    mesaj = (
+        "⚽ *xG Poisson & İlk Yarı Analiz Botu*\n\n"
+        "Kullanım Formatı:\n"
+        "`/analiz [Ev xG] [Ev xGA] [Ev Maç] [Dep xG] [Dep xGA] [Dep Maç]`\n\n"
+        "*Örnek:*\n`/analiz 8.1 3.8 3 5.9 2.7 3`"
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(mesaj, parse_mode='Markdown')
 
-async def analiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text(
-            "Lütfen en azından xG değerlerini girin!\nÖrnek: `/analiz 1.70 1.10` veya `/analiz Arsenal Chelsea 1.70 1.10`",
-            parse_mode="Markdown"
-        )
-        return
-
+async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Sadece sayılar girildiyse: /analiz 1.70 1.10
-        if len(args) == 2:
-            ev_ad, dep_ad = "Ev Sahibi", "Deplasman"
-            ev_xg = float(args[0].replace(",", "."))
-            dep_xg = float(args[1].replace(",", "."))
-            oran = None
-        # Takım isimleriyle: /analiz Arsenal Chelsea 1.70 1.10
-        elif len(args) == 4:
-            ev_ad, dep_ad = args[0], args[1]
-            ev_xg = float(args[2].replace(",", "."))
-            dep_xg = float(args[3].replace(",", "."))
-            oran = None
-        # Oran ile: /analiz Arsenal Chelsea 1.70 1.10 2.05
-        elif len(args) == 5:
-            ev_ad, dep_ad = args[0], args[1]
-            ev_xg = float(args[2].replace(",", "."))
-            dep_xg = float(args[3].replace(",", "."))
-            oran = float(args[4].replace(",", "."))
-        else:
-            await update.message.reply_text("Formatı kontrol edin. Örnek: `/analiz Arsenal Chelsea 1.70 1.10`", parse_mode="Markdown")
+        args = context.args
+        if len(args) != 6:
+            await update.message.reply_text(
+                "❌ *Hatalı Girdi!*\n"
+                "Lütfen 6 adet sayı girin:\n"
+                "`/analiz [Ev xG] [Ev xGA] [Ev Maç] [Dep xG] [Dep xGA] [Dep Maç]`\n\n"
+                "*Örnek:*\n`/analiz 8.1 3.8 3 5.9 2.7 3`",
+                parse_mode='Markdown'
+            )
             return
 
-        cevap = analiz_motoru(ev_ad, dep_ad, ev_xg, dep_xg, oran)
-        await update.message.reply_text(cevap, parse_mode="Markdown")
+        temiz_args = [float(a.replace(',', '.')) for a in args]
+        ev_toplam_xg, ev_toplam_xga, ev_mac, dep_toplam_xg, dep_toplam_xga, dep_mac = temiz_args
 
-    except Exception:
-        await update.message.reply_text("Hata! xG ve oran değerlerini sayı olarak girdiğinizden emin olun (örn: 1.5).")
+        if ev_mac <= 0 or dep_mac <= 0:
+            await update.message.reply_text("❌ Maç sayısı 0'dan büyük olmalıdır.")
+            return
 
-# --- 4. BAŞLATICI ---
+        # 1. Maç Başı Ortalamaların Hesaplanması
+        ev_hucum = ev_toplam_xg / ev_mac
+        ev_savunma = ev_toplam_xga / ev_mac
+        dep_hucum = dep_toplam_xg / dep_mac
+        dep_savunma = dep_toplam_xga / dep_mac
+
+        lig_ort = 1.35
+
+        # 2. Maç Sonu Gol Beklentileri (Full Time Lambda)
+        ev_lambda = (ev_hucum * dep_savunma) / lig_ort
+        dep_lambda = (dep_hucum * ev_savunma) / lig_ort
+
+        # 3. İlk Yarı Gol Beklentileri (~%45)
+        iy_ev_lambda = ev_lambda * 0.45
+        iy_dep_lambda = dep_lambda * 0.45
+
+        # --- MAÇ SONU HESAPLAMALARI ---
+        ms_1 = ms_0 = ms_2 = ust_2_5 = kg_var = 0.0
+        for i in range(7):
+            for j in range(7):
+                p = poisson_olasilik(ev_lambda, i) * poisson_olasilik(dep_lambda, j)
+                if i > j: ms_1 += p
+                elif i == j: ms_0 += p
+                else: ms_2 += p
+                if (i + j) > 2.5: ust_2_5 += p
+                if i > 0 and j > 0: kg_var += p
+
+        # --- İLK YARI HESAPLAMALARI & SKOR MATRİSİ ---
+        iy_1 = iy_0 = iy_2 = iy_ust_0_5 = iy_ust_1_5 = 0.0
+        iy_skorlar = {}
+
+        for i in range(5):      # İlk yarı ev golleri (0-4)
+            for j in range(5):  # İlk yarı dep golleri (0-4)
+                p_iy = poisson_olasilik(iy_ev_lambda, i) * poisson_olasilik(iy_dep_lambda, j)
+                iy_skorlar[f"{i}-{j}"] = p_iy
+
+                if i > j: iy_1 += p_iy
+                elif i == j: iy_0 += p_iy
+                else: iy_2 += p_iy
+
+                if (i + j) > 0.5: iy_ust_0_5 += p_iy
+                if (i + j) > 1.5: iy_ust_1_5 += p_iy
+
+        sirali_iy_skorlar = sorted(iy_skorlar.items(), key=lambda x: x[1], reverse=True)[:3]
+        skor_metni = "\n".join([f"  • *{skor}:* %{prob*100:.1f}" for skor, prob in sirali_iy_skorlar])
+
+        # 4. Telegram Yanıt Raporu
+        rapor = (
+            "📊 *MAÇ & İLK YARI POISSON ANALİZİ*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 *Gol Beklentileri (Ev / Dep):*\n"
+            f"• Maç Sonu xG: `{ev_lambda:.2f}` / `{dep_lambda:.2f}`\n"
+            f"• İlk Yarı xG: `{iy_ev_lambda:.2f}` / `{iy_dep_lambda:.2f}`\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⏱️ *İLK YARI (İY) TAHMİNLERİ:*\n"
+            f"• *İY 1:* %{iy_1 * 100:.1f} | *İY 0:* %{iy_0 * 100:.1f} | *İY 2:* %{iy_2 * 100:.1f}\n"
+            f"• *İY 0.5 ÜST:* %{iy_ust_0_5 * 100:.1f}  (Alt: %{(1 - iy_ust_0_5) * 100:.1f})\n"
+            f"• *İY 1.5 ÜST:* %{iy_ust_1_5 * 100:.1f}  (Alt: %{(1 - iy_ust_1_5) * 100:.1f})\n\n"
+            f"📌 *En Olası İlk Yarı Skorları:*\n{skor_metni}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🏁 *MAÇ SONU (MS) TAHMİNLERİ:*\n"
+            f"• *MS 1:* %{ms_1 * 100:.1f} | *MS 0:* %{ms_0 * 100:.1f} | *MS 2:* %{ms_2 * 100:.1f}\n"
+            f"• *2.5 ÜST:* %{ust_2_5 * 100:.1f}  (Alt: %{(1 - ust_2_5) * 100:.1f})\n"
+            f"• *KG VAR:* %{kg_var * 100:.1f}  (Yok: %{(1 - kg_var) * 100:.1f})\n"
+            "━━━━━━━━━━━━━━━━━━━━"
+        )
+
+        await update.message.reply_text(rapor, parse_mode='Markdown')
+
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Hata: {str(e)}")
+
 def main():
-    threading.Thread(target=run_web_server, daemon=True).start()
-
-    token = os.environ.get("BOT_TOKEN")
-    app = ApplicationBuilder().token(token).build()
-
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("analiz", analiz_cmd))
-
-    print("Gelişmiş Bot Başlatıldı...")
+    app.add_handler(CommandHandler("analiz", analiz))
+    print("Bot çalışıyor...")
     app.run_polling()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
