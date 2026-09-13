@@ -1,15 +1,33 @@
 import math
 import logging
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # Telegram Bot Token'ın
 BOT_TOKEN = "8342687226:AAFZjrDQi1kXIZw7-Y5gWEKTp3gz81a56pM"
 
+# --- 1. RENDER'IN İSTEDİĞİ CANLI TUTMA WEB SUNUCUSU ---
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot 7/24 Aktif Calisiyor!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
+
+# Web sunucusunu arka planda başlat
+threading.Thread(target=run_web_server, daemon=True).start()
+
+# --- 2. POISSON & ANALİZ HESAPLAMALARI ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 def poisson_olasilik(lmbda, k):
-    """Poisson olasılık formülü: P(X=k) = (e^(-lambda) * lambda^k) / k!"""
     return (math.exp(-lmbda) * (lmbda ** k)) / math.factorial(k)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -41,7 +59,7 @@ async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Maç sayısı 0'dan büyük olmalıdır.")
             return
 
-        # 1. Maç Başı Ortalamaların Hesaplanması
+        # Maç Başı Ortalamalar
         ev_hucum = ev_toplam_xg / ev_mac
         ev_savunma = ev_toplam_xga / ev_mac
         dep_hucum = dep_toplam_xg / dep_mac
@@ -49,15 +67,15 @@ async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         lig_ort = 1.35
 
-        # 2. Maç Sonu Gol Beklentileri (Full Time Lambda)
+        # Gol Beklentileri (Lambda)
         ev_lambda = (ev_hucum * dep_savunma) / lig_ort
         dep_lambda = (dep_hucum * ev_savunma) / lig_ort
 
-        # 3. İlk Yarı Gol Beklentileri (~%45)
+        # İlk Yarı Beklentileri (%45)
         iy_ev_lambda = ev_lambda * 0.45
         iy_dep_lambda = dep_lambda * 0.45
 
-        # --- MAÇ SONU HESAPLAMALARI ---
+        # Maç Sonu Olasılıkları
         ms_1 = ms_0 = ms_2 = ust_2_5 = kg_var = 0.0
         for i in range(7):
             for j in range(7):
@@ -68,12 +86,12 @@ async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if (i + j) > 2.5: ust_2_5 += p
                 if i > 0 and j > 0: kg_var += p
 
-        # --- İLK YARI HESAPLAMALARI & SKOR MATRİSİ ---
+        # İlk Yarı Olasılıkları & Skor Matrisi
         iy_1 = iy_0 = iy_2 = iy_ust_0_5 = iy_ust_1_5 = 0.0
         iy_skorlar = {}
 
-        for i in range(5):      # İlk yarı ev golleri (0-4)
-            for j in range(5):  # İlk yarı dep golleri (0-4)
+        for i in range(5):
+            for j in range(5):
                 p_iy = poisson_olasilik(iy_ev_lambda, i) * poisson_olasilik(iy_dep_lambda, j)
                 iy_skorlar[f"{i}-{j}"] = p_iy
 
@@ -87,7 +105,7 @@ async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sirali_iy_skorlar = sorted(iy_skorlar.items(), key=lambda x: x[1], reverse=True)[:3]
         skor_metni = "\n".join([f"  • *{skor}:* %{prob*100:.1f}" for skor, prob in sirali_iy_skorlar])
 
-        # 4. Telegram Yanıt Raporu
+        # Rapor
         rapor = (
             "📊 *MAÇ & İLK YARI POISSON ANALİZİ*\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
