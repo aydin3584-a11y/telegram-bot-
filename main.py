@@ -7,7 +7,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # Telegram Bot Token'ın
-BOT_TOKEN = "8342687226:AAFZjrDQi1kXIZw7-Y5gWEKTp3gz81a56pM"
+BOT_TOKEN = "8342687226:AAFZjrDQi1kXIZw7-Y5gWEKTp3gz8la56pM"
 
 # --- 1. RENDER'IN İSTEDİĞİ CANLI TUTMA WEB SUNUCUSU ---
 class SimpleHandler(BaseHTTPRequestHandler):
